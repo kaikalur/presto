@@ -27,10 +27,12 @@ import com.google.common.primitives.Ints;
 
 import java.lang.invoke.MethodHandle;
 import java.util.AbstractList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
 import static com.facebook.presto.common.function.OperatorType.LESS_THAN;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 
@@ -110,6 +112,56 @@ public final class ArraySortFunction
 
         for (int i = 0; i < arrayLength; i++) {
             type.appendTo(block, sortedListOfPositions.get(i), blockBuilder);
+        }
+
+        return blockBuilder.build();
+    }
+
+    @SqlType("array(bigint)")
+    public static Block bigintSort(@SqlType("array(bigint)") Block array)
+    {
+        final int arrayLength = array.getPositionCount();
+        if (arrayLength < 2) {
+            return array;
+        }
+
+        long[] values = new long[array.getPositionCount()];
+        boolean[] nulls = new boolean[array.getPositionCount()];
+
+        if (array.mayHaveNull()) {
+            for (int i = 0; i < array.getPositionCount(); i++) {
+                if (array.isNull(i)) {
+                    values[i] = Long.MAX_VALUE;
+                    nulls[i] = true;
+                }
+                else {
+                    values[i] = array.getLong(i);
+                }
+            }
+        }
+        else {
+            for (int i = 0; i < array.getPositionCount(); i++) {
+                values[i] = array.getLong(i);
+            }
+        }
+
+        Arrays.sort(values);
+
+        BlockBuilder blockBuilder = BIGINT.createBlockBuilder(null, arrayLength);
+        if (array.mayHaveNull()) {
+            for (int i = 0; i < values.length; i++) {
+                blockBuilder.writeLong(values[i]);
+            }
+        }
+        else {
+            for (int i = 0; i < values.length; i++) {
+                if (array.isNull(i)) {
+                    blockBuilder.appendNull();
+                }
+                else {
+                    blockBuilder.writeLong(values[i]);
+                }
+            }
         }
 
         return blockBuilder.build();
