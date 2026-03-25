@@ -887,14 +887,19 @@ public class UnaliasSymbolReferences
         private VariableReferenceExpression canonicalize(VariableReferenceExpression variable)
         {
             String canonical = variable.getName();
-            Set<String> visited = new HashSet<>();
-            visited.add(canonical);
+            Set<String> visited = null;
             while (mapping.containsKey(canonical)) {
+                if (visited == null) {
+                    visited = new HashSet<>();
+                    visited.add(variable.getName());
+                }
+                String previous = canonical;
                 canonical = mapping.get(canonical);
                 if (!visited.add(canonical)) {
-                    // Cycle detected in alias mapping; break the cycle by removing the mapping entry
-                    // that would close the loop and stop at the current canonical name.
-                    mapping.remove(canonical);
+                    // Cycle detected in alias mapping; remove the back-edge (the mapping from
+                    // the predecessor that points back to an already-visited symbol) to break the cycle.
+                    mapping.remove(previous);
+                    canonical = previous;
                     break;
                 }
             }
