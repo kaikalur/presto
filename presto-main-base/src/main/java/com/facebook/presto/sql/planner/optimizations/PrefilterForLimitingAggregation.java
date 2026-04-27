@@ -80,7 +80,7 @@ import static java.lang.Boolean.TRUE;
  * CROSS JOIN (SELECT MAP_AGG(hash(userid)) m FROM (SELECT DISTINCT userid FROM Table LIMIT 1000)))
  * WHERE IF(CARDINALITY(m)=1000, m[hash(userid)], TRUE)
  * <p>
- * In addition we also add a timeout to the distinctlimit we add so that we don't get stuck trying to find the keys
+ * In addition we also add a scan cap (10x the LIMIT) before the distinctlimit to avoid scanning the entire table when distinct keys are sparse
  */
 
 public class PrefilterForLimitingAggregation
@@ -211,16 +211,22 @@ public class PrefilterForLimitingAggregation
 
             PlanNode originalSource = aggregationNode.getSource();
             PlanNode keySource = clonePlanNode(originalSource, session, metadata, idAllocator, keys, new HashMap<>());
-            // TODO(kaikalur): See if timetout can be done in a cleaner way in the middle tier
-            DistinctLimitNode timedDistinctLimitNode = new DistinctLimitNode(
+            // Add a hard row-count cap: scan at most 10x the LIMIT rows to find distinct keys.
+            // If that isn't enough, the cardinality check will pass all rows through unfiltered.
+            LimitNode scanCap = new LimitNode(
                     Optional.empty(),
                     idAllocator.getNextId(),
                     keySource,
+                    10 * count,
+                    LimitNode.Step.FINAL);
+            DistinctLimitNode timedDistinctLimitNode = new DistinctLimitNode(
+                    Optional.empty(),
+                    idAllocator.getNextId(),
+                    scanCap,
                     count,
                     false,
                     keys,
-                    Optional.empty(),
-                    SystemSessionProperties.getPrefilterForGroupbyLimitTimeoutMS(session));
+                    Optional.empty());
 
             FunctionAndTypeManager functionAndTypeManager = metadata.getFunctionAndTypeManager();
             RowExpression leftHashExpression = getVariableHash(keys, functionAndTypeManager);
