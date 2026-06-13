@@ -18,6 +18,7 @@ import com.facebook.presto.common.block.SortOrder;
 import com.facebook.presto.common.function.OperatorType;
 import com.facebook.presto.common.type.ArrayType;
 import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.RowType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.cost.StatsAndCosts;
@@ -41,6 +42,7 @@ import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.plan.ProjectNode.Locality;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.plan.UnionNode;
+import com.facebook.presto.spi.plan.UnnestNode;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.DeterminismEvaluator;
@@ -316,6 +318,56 @@ public class PlannerUtils
                 variableAllocator,
                 ImmutableList.of(resultVariable),
                 ImmutableList.of());
+    }
+
+    /**
+     * Builds an {@code array_agg(argument)} aggregation that packs the (non-grouped) input rows
+     * into an array. The result type is {@code array(argument type)}; the aggregation has no
+     * filter, ordering, mask and is not distinct. Useful for collapsing a fan-out into one row
+     * per group that can later be re-expanded with {@link #createArrayUnnestNode}.
+     */
+    public static AggregationNode.Aggregation createArrayAggregation(FunctionAndTypeManager functionAndTypeManager, RowExpression argument)
+    {
+        CallExpression call = call(functionAndTypeManager, "array_agg", new ArrayType(argument.getType()), argument);
+        return new AggregationNode.Aggregation(call, Optional.empty(), Optional.empty(), false, Optional.empty());
+    }
+
+    /**
+     * Builds an {@link UnnestNode} that expands {@code arrayVariable} into per-element output
+     * variables, mirroring the planner's non-legacy {@code CROSS JOIN UNNEST} semantics:
+     * an {@code array(row(f0, f1, ...))} produces one output variable per row field (in field
+     * order), while an {@code array(T)} with a non-row element produces a single output variable.
+     * The freshly allocated unnest output variables can be retrieved from the returned node via
+     * {@code node.getUnnestVariables().get(arrayVariable)}.
+     */
+    public static UnnestNode createArrayUnnestNode(
+            PlanNodeIdAllocator planNodeIdAllocator,
+            VariableAllocator variableAllocator,
+            PlanNode source,
+            List<VariableReferenceExpression> replicateVariables,
+            VariableReferenceExpression arrayVariable,
+            Optional<VariableReferenceExpression> ordinalityVariable)
+    {
+        checkArgument(arrayVariable.getType() instanceof ArrayType, "arrayVariable must have array type, got %s", arrayVariable.getType());
+        Type elementType = ((ArrayType) arrayVariable.getType()).getElementType();
+
+        ImmutableList.Builder<VariableReferenceExpression> unnestedVariables = ImmutableList.builder();
+        if (elementType instanceof RowType) {
+            for (RowType.Field field : ((RowType) elementType).getFields()) {
+                unnestedVariables.add(variableAllocator.newVariable(arrayVariable.getSourceLocation(), "field", field.getType()));
+            }
+        }
+        else {
+            unnestedVariables.add(variableAllocator.newVariable(arrayVariable.getSourceLocation(), "field", elementType));
+        }
+
+        return new UnnestNode(
+                source.getSourceLocation(),
+                planNodeIdAllocator.getNextId(),
+                source,
+                replicateVariables,
+                ImmutableMap.of(arrayVariable, unnestedVariables.build()),
+                ordinalityVariable);
     }
 
     private static PlanNode cloneFilterNode(FilterNode filterNode, Session session, Metadata metadata, PlanNodeIdAllocator planNodeIdAllocator, List<VariableReferenceExpression> variablesToKeep, Map<VariableReferenceExpression, VariableReferenceExpression> varMap, PlanNodeIdAllocator idAllocator)
