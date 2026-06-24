@@ -827,4 +827,10 @@ public class TestPartitionAwareGroupedExecution
 
         assertQueryWithSameQueryRunner(partitionAwareSession(), query, standardGroupedSession());
     }
+
+    // NOTE: $row_id joins are only valid on transactional (ACID) Hive tables, where $row_id is the
+    // {writeId, bucketId, rowId} identifier (unique and bucket-aligned). The colocated grouped-execution
+    // optimization for $row_id joins is gated on isTransactionalTable in the Hive connector and is
+    // validated on a cluster with real ACID tables — the in-process test harness cannot create
+    // transactional tables, and a $row_id join on the non-transactional tables here is not a valid case.
 }

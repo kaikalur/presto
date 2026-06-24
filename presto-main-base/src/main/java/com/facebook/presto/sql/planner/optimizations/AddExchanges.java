@@ -18,6 +18,7 @@ import com.facebook.presto.common.type.Type;
 import com.facebook.presto.connector.system.GlobalSystemConnector;
 import com.facebook.presto.execution.QueryManagerConfig.ExchangeMaterializationStrategy;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.metadata.TableLayout;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Constraint;
@@ -1116,6 +1117,17 @@ public class AddExchanges
 
             PlanWithProperties right;
 
+            // If the join keys are colocation columns of the same table (columns whose equality implies
+            // the same split group, e.g. a synthesized $row_id), the existing partitioning already
+            // colocates matching rows — no repartition exchange is needed. Build the join directly so
+            // grouped execution can apply. See ConnectorTablePartitioning#getColocationColumns().
+            if (isColocatedJoinEnabled(session)) {
+                Optional<PlanWithProperties> colocated = tryColocatedJoinOnColocationColumns(node, leftVariables, rightVariables, left);
+                if (colocated.isPresent()) {
+                    return colocated.get();
+                }
+            }
+
             if (isNodePartitionedOn(left.getProperties(), leftVariables) && !left.getProperties().isSingleNode()) {
                 Partitioning rightPartitioning = left.getProperties().translateVariable(createTranslator(leftToRight)).getNodePartitioning().get();
                 right = accept(node.getRight(), PreferredProperties.partitioned(rightPartitioning));
@@ -1182,6 +1194,45 @@ public class AddExchanges
             }
 
             return buildJoin(node, left, right, JoinDistributionType.PARTITIONED);
+        }
+
+        /**
+         * If both join inputs are scans of the same table and some equi-join key pair is the same
+         * colocation column on both sides (a column whose equality implies the same split group, e.g.
+         * a synthesized $row_id), the existing partitioning already colocates matching rows. In that
+         * case build the join directly with no repartition exchange, so the bucketed source fragment is
+         * preserved and grouped execution can apply.
+         */
+        private Optional<PlanWithProperties> tryColocatedJoinOnColocationColumns(JoinNode node, List<VariableReferenceExpression> leftVariables, List<VariableReferenceExpression> rightVariables, PlanWithProperties left)
+        {
+            if (!(left.getNode() instanceof TableScanNode) || !(node.getRight() instanceof TableScanNode)) {
+                return Optional.empty();
+            }
+            TableScanNode leftScan = (TableScanNode) left.getNode();
+            TableScanNode rightScan = (TableScanNode) node.getRight();
+            // Colocation columns (e.g. $row_id) only guarantee same-split-group within one table.
+            if (!leftScan.getTable().equals(rightScan.getTable())) {
+                return Optional.empty();
+            }
+            Optional<TableLayout.TablePartitioning> tablePartitioning = metadata.getLayout(session, leftScan.getTable()).getTablePartitioning();
+            if (!tablePartitioning.isPresent() || tablePartitioning.get().getColocationColumns().isEmpty()) {
+                return Optional.empty();
+            }
+            Set<ColumnHandle> colocationColumns = ImmutableSet.copyOf(tablePartitioning.get().getColocationColumns());
+            boolean colocated = false;
+            for (int i = 0; i < leftVariables.size(); i++) {
+                ColumnHandle leftColumn = leftScan.getAssignments().get(leftVariables.get(i));
+                ColumnHandle rightColumn = rightScan.getAssignments().get(rightVariables.get(i));
+                if (leftColumn != null && leftColumn.equals(rightColumn) && colocationColumns.contains(leftColumn)) {
+                    colocated = true;
+                    break;
+                }
+            }
+            if (!colocated) {
+                return Optional.empty();
+            }
+            PlanWithProperties right = accept(node.getRight(), PreferredProperties.partitioned(ImmutableSet.copyOf(rightVariables)));
+            return Optional.of(buildJoin(node, left, right, JoinDistributionType.PARTITIONED));
         }
 
         private PlanWithProperties planReplicatedJoin(JoinNode node, PlanWithProperties left)

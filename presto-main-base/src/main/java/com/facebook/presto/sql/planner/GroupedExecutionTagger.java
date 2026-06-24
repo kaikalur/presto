@@ -484,6 +484,23 @@ class GroupedExecutionTagger
                     }
                 }
             }
+            // Treat $path as partition column for grouped execution colocation, and treat $row_id as $path
+            // since $row_id = <partitionid, rowgroupid, version, rownumber> and $path is functionally dependent
+            // on the first three fields. This enables colocated grouped execution for joins on $row_id
+            // without requiring $path in the join criteria.
+            Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle);
+            ColumnHandle pathHandle = columnHandles.get("$path");
+            ColumnHandle rowIdHandle = columnHandles.get("$row_id");
+            if (pathHandle != null) {
+                TableScanColumn pathTsc = new TableScanColumn(nodeId, pathHandle);
+                for (Map.Entry<VariableReferenceExpression, ColumnHandle> entry : assignments.entrySet()) {
+                    String columnName = metadata.getColumnMetadata(session, tableHandle, entry.getValue()).getName();
+                    if ("$path".equals(columnName) || "$row_id".equals(columnName)) {
+                        partitionColumns.put(entry.getKey(), pathTsc);
+                        unionFind.add(pathTsc);
+                    }
+                }
+            }
         }
 
         return new GroupedExecutionTagger.GroupedExecutionProperties(

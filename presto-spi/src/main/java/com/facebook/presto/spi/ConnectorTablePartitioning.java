@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import static java.util.Collections.emptyList;
 import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
 
@@ -53,11 +54,18 @@ public class ConnectorTablePartitioning
 {
     private final ConnectorPartitioningHandle partitioningHandle;
     private final List<ColumnHandle> partitioningColumns;
+    private final List<ColumnHandle> colocationColumns;
 
     public ConnectorTablePartitioning(ConnectorPartitioningHandle partitioningHandle, List<ColumnHandle> partitioningColumns)
     {
+        this(partitioningHandle, partitioningColumns, emptyList());
+    }
+
+    public ConnectorTablePartitioning(ConnectorPartitioningHandle partitioningHandle, List<ColumnHandle> partitioningColumns, List<ColumnHandle> colocationColumns)
+    {
         this.partitioningHandle = requireNonNull(partitioningHandle, "partitioningHandle is null");
         this.partitioningColumns = unmodifiableList(new ArrayList<>(requireNonNull(partitioningColumns, "partitioningColumns is null")));
+        this.colocationColumns = unmodifiableList(new ArrayList<>(requireNonNull(colocationColumns, "colocationColumns is null")));
     }
 
     /**
@@ -80,6 +88,18 @@ public class ConnectorTablePartitioning
         return partitioningColumns;
     }
 
+    /**
+     * Additional columns (beyond {@link #getPartitioningColumns()}) for which rows with the same
+     * value are guaranteed to be in the same split group, even though these columns are not inputs to
+     * the partitioning function. For example, a synthesized per-row id whose value determines the
+     * bucket it lives in. A join on any such column is therefore colocated by this partitioning and
+     * does not require a repartition exchange. Empty by default.
+     */
+    public List<ColumnHandle> getColocationColumns()
+    {
+        return colocationColumns;
+    }
+
     @Override
     public boolean equals(Object o)
     {
@@ -91,12 +111,13 @@ public class ConnectorTablePartitioning
         }
         ConnectorTablePartitioning that = (ConnectorTablePartitioning) o;
         return Objects.equals(partitioningHandle, that.partitioningHandle) &&
-                Objects.equals(partitioningColumns, that.partitioningColumns);
+                Objects.equals(partitioningColumns, that.partitioningColumns) &&
+                Objects.equals(colocationColumns, that.colocationColumns);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(partitioningHandle, partitioningColumns);
+        return Objects.hash(partitioningHandle, partitioningColumns, colocationColumns);
     }
 }

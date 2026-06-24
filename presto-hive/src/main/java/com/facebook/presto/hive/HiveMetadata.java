@@ -2981,11 +2981,20 @@ public class HiveMetadata
                 }
             }
 
+            // $row_id is a real, per-row, location-encoding identifier ({writeId, bucketId, rowId}) only on
+            // transactional (ACID) tables; there equal $row_id implies the same bucket (split group), so a
+            // join on $row_id is colocated by the existing bucketing without a repartition exchange. On
+            // non-transactional tables $row_id is a degenerate placeholder (not unique/bucket-aligned),
+            // so it must NOT be declared as a colocation column.
+            List<ColumnHandle> colocationColumns = isTransactionalTable(table.getParameters())
+                    ? ImmutableList.of(rowIdColumnHandle())
+                    : ImmutableList.of();
             tablePartitioning = Optional.of(new ConnectorTablePartitioning(
                     partitioningHandle,
                     hiveBucketHandle.getColumns().stream()
                             .map(ColumnHandle.class::cast)
-                            .collect(toImmutableList())));
+                            .collect(toImmutableList()),
+                    colocationColumns));
         }
 
         TupleDomain<ColumnHandle> predicate;

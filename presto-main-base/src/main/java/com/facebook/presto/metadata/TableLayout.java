@@ -101,7 +101,8 @@ public class TableLayout
                                 Optional.of(connectorId),
                                 Optional.of(transactionHandle),
                                 nodePartitioning.getPartitioningHandle()),
-                        nodePartitioning.getPartitioningColumns()));
+                        nodePartitioning.getPartitioningColumns(),
+                        nodePartitioning.getColocationColumns()));
     }
 
     public Optional<Set<ColumnHandle>> getStreamPartitioningColumns()
@@ -123,11 +124,18 @@ public class TableLayout
     {
         private final PartitioningHandle partitioningHandle;
         private final List<ColumnHandle> partitioningColumns;
+        private final List<ColumnHandle> colocationColumns;
 
         public TablePartitioning(PartitioningHandle partitioningHandle, List<ColumnHandle> partitioningColumns)
         {
+            this(partitioningHandle, partitioningColumns, ImmutableList.of());
+        }
+
+        public TablePartitioning(PartitioningHandle partitioningHandle, List<ColumnHandle> partitioningColumns, List<ColumnHandle> colocationColumns)
+        {
             this.partitioningHandle = requireNonNull(partitioningHandle, "partitioningHandle is null");
             this.partitioningColumns = ImmutableList.copyOf(requireNonNull(partitioningColumns, "partitioningColumns is null"));
+            this.colocationColumns = ImmutableList.copyOf(requireNonNull(colocationColumns, "colocationColumns is null"));
         }
 
         public PartitioningHandle getPartitioningHandle()
@@ -138,6 +146,16 @@ public class TableLayout
         public List<ColumnHandle> getPartitioningColumns()
         {
             return partitioningColumns;
+        }
+
+        /**
+         * Additional columns for which equal values imply the same split group (and are therefore
+         * colocated by this partitioning without a repartition), even though they are not inputs to
+         * the partitioning function. See {@link com.facebook.presto.spi.ConnectorTablePartitioning#getColocationColumns()}.
+         */
+        public List<ColumnHandle> getColocationColumns()
+        {
+            return colocationColumns;
         }
 
         @Override
@@ -151,13 +169,14 @@ public class TableLayout
             }
             TablePartitioning that = (TablePartitioning) o;
             return Objects.equals(partitioningHandle, that.partitioningHandle) &&
-                    Objects.equals(partitioningColumns, that.partitioningColumns);
+                    Objects.equals(partitioningColumns, that.partitioningColumns) &&
+                    Objects.equals(colocationColumns, that.colocationColumns);
         }
 
         @Override
         public int hashCode()
         {
-            return Objects.hash(partitioningHandle, partitioningColumns);
+            return Objects.hash(partitioningHandle, partitioningColumns, colocationColumns);
         }
     }
 }
